@@ -20,7 +20,7 @@ This repository contains a Jupyter Notebook (`ECNN_ADAMAX.ipynb`) that implement
 - OpenCV
 
 ## Dataset
-The dataset consists of images of potato leaves, categorized into different classes representing healthy and diseased leaves. This data is essential for training the CNN model and can be obtained from [insert dataset source link if applicable].
+The dataset consists of images of potato leaves, categorized into different classes representing healthy and diseased leaves. This data is essential for training the CNN model and can be obtained from [[insert dataset source link if applicable](https://www.kaggle.com/datasets/abdallahalidev/plantvillage-dataset)].
 
 ## Features
 - Data loading and preprocessing
