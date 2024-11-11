@@ -4,4 +4,3 @@ opencv-python-headless
 numpy
 pillow
 requests
-cv2
