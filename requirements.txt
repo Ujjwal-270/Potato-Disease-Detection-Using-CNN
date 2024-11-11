@@ -4,3 +4,4 @@ numpy
 opencv-python-headless
 Pillow
 inference-sdk
+opencv-python-headless
