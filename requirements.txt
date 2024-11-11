@@ -5,7 +5,6 @@ opencv-python-headless
 Pillow
 inference-sdk
 tensorflow==2.18.0
-opencv-python-headless==4.10.0.84
 opencv-python-headless==4.5.1.48
 opencv-python==4.5.1.48
 absl-py==2.1.0
