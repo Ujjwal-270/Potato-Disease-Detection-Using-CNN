@@ -1,69 +1,129 @@
+import tensorflow as tf
+import numpy as np
+import cv2
+from PIL import Image
+from inference_sdk import InferenceHTTPClient
 import streamlit as st
-import yfinance as yf
-from prophet import Prophet
-import pandas as pd
-import plotly.graph_objs as go
+import os
 
-# Title of the app
-st.title('📈 Stock Price Prediction Web App')
+# Initialize Roboflow clients
+CLIENT = InferenceHTTPClient(
+    api_url="https://outline.roboflow.com",
+    api_key="Y2wcQEsumYC5oVy6Oe3C"
+)
 
-# Add logo to the sidebar
-st.sidebar.image('Designer.jpeg', width=100)  # Adjust the width as needed
+CLIENT2 = InferenceHTTPClient(
+    api_url="https://outline.roboflow.com",
+    api_key="Y2wcQEsumYC5oVy6Oe3C"
+)
 
-# Sidebar for user input
-st.sidebar.header('Input Stock Parameters')
+# Define class names for prediction
+class_names = ['Potato___Early_blight', 'Potato___Late_blight', 'Potato___healthy'] # Modify this list according to your model
 
-# Select box for stock symbol with a few options
-stock_symbol = st.sidebar.selectbox('Select Stock Symbol:', ['AAPL', 'NFLX', 'GOOGL', 'AMZN', 'MSFT'], index=0)
+def create_mask_from_points(image_shape, points):
+    mask = np.zeros(image_shape[:2], dtype=np.uint8)
+    points_array = np.array([[p['x'], p['y']] for p in points], dtype=np.int32)
+    cv2.fillPoly(mask, [points_array], 1)
+    return mask
 
-# Slider for date range selection
-start_date = st.sidebar.date_input('Start Date', pd.to_datetime('2020-01-01'))
-end_date = st.sidebar.date_input('End Date', pd.to_datetime('today'))
+def predict(model, img):
+    img_array = tf.keras.preprocessing.image.img_to_array(img)
+    img_array = tf.expand_dims(img_array, 0)
 
-# Fetch stock data from Yahoo Finance
-st.write(f"Fetching stock data for **{stock_symbol}** from **{start_date}** to **{end_date}**...")
-data = yf.download(stock_symbol, start=start_date, end=end_date)
+    predictions = model.predict(img_array)
+    predicted_class = class_names[np.argmax(predictions[0])]
+    confidence = round(100 * (np.max(predictions[0])), 2)
 
-# Check if data is valid
-if data.empty or len(data) < 2:
-    st.error(f"Error: No or insufficient data found for {stock_symbol}. Please enter a valid stock symbol.")
+    segmentation_result = CLIENT.infer(img, model_id="plant-disease-detection-ryzqa/7")
+    infected_area_mask = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
+    total_leaf_area_mask = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
+
+    if predicted_class != 'Potato___healthy':
+        segmentation_predictions = segmentation_result['predictions']
+        for seg_pred in segmentation_predictions:
+            if seg_pred['confidence'] > 0.4:
+                points = seg_pred['points']
+                single_mask = create_mask_from_points(img.shape, points)
+                infected_area_mask = cv2.bitwise_or(infected_area_mask, single_mask)
+
+    leaf_segmentation_result = CLIENT2.infer(img, model_id="segmentasi-daun/4")
+    leaf_segmentation_predictions = leaf_segmentation_result['predictions']
+    for leaf_seg_pred in leaf_segmentation_predictions:
+        if leaf_seg_pred['confidence'] > 0.4:
+            leaf_points = leaf_seg_pred['points']
+            leaf_single_mask = create_mask_from_points(img.shape, leaf_points)
+            total_leaf_area_mask = cv2.bitwise_or(total_leaf_area_mask, leaf_single_mask)
+
+    infected_area_pixels = np.count_nonzero(infected_area_mask)
+    total_leaf_area_pixels = np.count_nonzero(total_leaf_area_mask)
+
+    if total_leaf_area_pixels > 0 and predicted_class != 'Potato___healthy':
+        infected_area_percentage = ((infected_area_pixels / total_leaf_area_pixels)) * 100 + 5
+    else:
+        infected_area_percentage = 0
+    # Cap the infected area percentage at 90%
+    infected_area_percentage = min(infected_area_percentage, 90)
+    return predicted_class, confidence, infected_area_mask, total_leaf_area_mask, infected_area_percentage
+
+# Streamlit app UI
+st.title('Potato Disease Detection and Segmentation')
+
+st.write(
+    "Upload an image of a potato leaf for disease detection and segmentation. The app will predict the disease class, "
+    "confidence, and segment infected areas of the leaf."
+)
+
+# File uploader for user to upload image
+uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+
+if uploaded_file is not None:
+    # Open the uploaded image
+    img = Image.open(uploaded_file)
+    img = img.convert("RGB")  # Ensure it's in RGB format
+    img_np = np.array(img)
+
+    # Display uploaded image
+    st.image(img, caption="Uploaded Image", use_container_width=True)
+
+    # Load the model from the same directory as app.py
+    model_path = os.path.join(os.getcwd(), "potatoes.h5")  # Path to your model in the same directory as app.py
+    try:
+        model = tf.keras.models.load_model(model_path)
+    except Exception as e:
+        st.error(f"Error loading model: {e}")
+        st.stop()
+
+    # Make predictions
+    predicted_class, confidence, infected_area_mask, total_leaf_area_mask, infected_area_percentage = predict(model, img_np)
+
+    # Display results
+    st.subheader(f"Prediction: {predicted_class}")
+    st.subheader(f"Confidence: {confidence}%")
+    st.subheader(f"Infected Area: {infected_area_percentage:.2f}%")
+
+    # Display combined infected area and leaf area mask with color overlay
+    st.subheader("Combined Mask with Infected Area (Red) and Leaf Area (Green)")
+
+    # Create a color mask for the infected area (Red)
+    color_mask_infected = np.zeros_like(img_np, dtype=np.uint8)
+    color_mask_infected[infected_area_mask > 0] = [255, 0, 0]  # Red color for the infected area
+
+    # Create a color mask for the total leaf area (Green)
+    color_mask_leaf = np.zeros_like(img_np, dtype=np.uint8)
+    color_mask_leaf[total_leaf_area_mask > 0] = [0, 255, 0]  # Green color for the leaf area
+
+    # Remove green areas where red exists (to prevent blending into yellow)
+    color_mask_leaf[infected_area_mask > 0] = [0, 0, 0]  # Set green mask to black where red is already present
+
+    # Combine both masks by layering them
+    combined_image = np.where(color_mask_infected > 0, color_mask_infected, img_np)  # Red areas over the original image
+    combined_image = np.where(color_mask_leaf > 0, color_mask_leaf, combined_image)  # Green areas over the previous result
+
+    # Display the combined image with both color masks
+    st.image(combined_image, caption="Combined Infected and Leaf Area Mask", use_container_width=True)
+
 else:
-    # Show raw data with a nice header
-    st.subheader(f'📊 {stock_symbol} Stock Data')
-    st.write(data.tail())
+    st.write("Please upload an image to start.")
 
-    # Prepare data for Prophet model
-    data.reset_index(inplace=True)
-    data = data[['Date', 'Close']]
-    data.columns = ['ds', 'y']  # Prophet expects 'ds' and 'y' column names
 
-    # Train Prophet model
-    model = Prophet()
-    model.fit(data)
 
-    # Make future predictions
-    future = model.make_future_dataframe(periods=365)
-    forecast = model.predict(future)
-
-    # Show forecast results
-    st.subheader(f'📈 Forecasting {stock_symbol} Stock Price')
-    st.write(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
-
-    # Convert 'ds' to datetime and 'yhat' to numeric
-    forecast['ds'] = pd.to_datetime(forecast['ds'])
-    forecast['yhat'] = pd.to_numeric(forecast['yhat'], errors='coerce')
-
-    # Handle invalid data
-    forecast.dropna(subset=['ds', 'yhat'], inplace=True)
-
-    # Line chart for predictions
-    st.line_chart(forecast[['ds', 'yhat']].set_index('ds'))
-
-    # Plot forecast components
-    st.subheader(f'{stock_symbol} Stock Forecast Components')
-    fig = model.plot_components(forecast)
-    st.write(fig)
-
-# Add footer
-st.markdown('---')
-st.write("Made with ❤️ by Ujjwal")
