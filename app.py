@@ -7,8 +7,8 @@ import streamlit as st
 import os
 
 # Retrieve the API key from Streamlit secrets
+st.write(st.secrets)
 API_KEY = st.secrets["ROBOFLOW_API_KEY"]
-
 # Initialize Roboflow clients
 CLIENT = InferenceHTTPClient(
     api_url="https://outline.roboflow.com",
